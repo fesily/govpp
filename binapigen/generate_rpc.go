@@ -77,6 +77,9 @@ func genService(g *GenFile, svc *Service) {
 	g.P("type ", serviceApiName, " interface {")
 	for _, rpc := range svc.RPCs {
 		g.P(rpcMethodSignature(g, rpc))
+		if len(rpc.VPP.Events) > 0 {
+			g.P(rpcMethodSignatureWatch(g, rpc))
+		}
 	}
 	g.P("}")
 	g.P()
@@ -104,6 +107,55 @@ func genService(g *GenFile, svc *Service) {
 
 	for _, rpc := range svc.RPCs {
 		logf(" gen RPC: %v (%s)", rpc.GoName, rpc.VPP.Request)
+
+		if len(rpc.VPP.Events) > 0 {
+			streamImpl := fmt.Sprintf("%s_%sClient", serviceImplName, rpc.GoName)
+			// streamApi := fmt.Sprintf("%s_%sClient", serviceApiName, rpc.GoName)
+
+			g.P("func (c *", serviceImplName, ") ", rpcMethodSignatureWatch(g, rpc), " {")
+
+			for i, evt := range rpc.MsgEvents {
+				g.P(fmt.Sprintf("	w%d", i), ", err := c.conn.WatchEvent(ctx, (*", evt.GoIdent, ")(nil))")
+				g.P("	if err != nil {")
+				for j := 0; j < i; j++ {
+					g.P("	w", j, ".Close()")
+				}
+				g.P("		return nil, err")
+				g.P("	}")
+			}
+			g.P("	return &", streamImpl, "{")
+			g.P("		watch: [", len(rpc.MsgEvents), "]api.Watcher{")
+			for i := range rpc.MsgEvents {
+				g.P(fmt.Sprintf("w%d,", i))
+			}
+			g.P("	}}, nil")
+			g.P("}")
+
+			g.P("type ", streamImpl, " struct {")
+			g.P("	watch [", len(rpc.MsgEvents), "]api.Watcher")
+			g.P("}")
+			g.P()
+
+			g.P("func (w *", streamImpl, ") Close() {")
+			g.P("	for _, wch := range w.watch {")
+			g.P("		wch.Close()")
+			g.P("	}")
+			g.P("}")
+			g.P()
+			for i, evt := range rpc.MsgEvents {
+				g.P("func (w *", streamImpl, ") Get", evt.GoIdent, "() <-chan ", evt.GoIdent, " {")
+				g.P("	evts := make(chan ", evt.GoIdent, ", 100)")
+				g.P("	go func() {")
+				g.P("		evt := w.watch[", i, "].Events()")
+				g.P("		for e := range evt {")
+				g.P("			evts <- *e.(*", evt.GoIdent, ")")
+				g.P("		}")
+				g.P("	}()")
+				g.P("	return evts")
+				g.P("}")
+				g.P()
+			}
+		}
 
 		g.P("func (c *", serviceImplName, ") ", rpcMethodSignature(g, rpc), " {")
 		if rpc.VPP.Stream {
@@ -255,5 +307,12 @@ func rpcMethodSignature(g *GenFile, rpc *RPC) string {
 		s += "*" + g.GoIdent(rpc.MsgReply.GoIdent) + ", "
 	}
 	s += "error)"
+	return s
+}
+
+func rpcMethodSignatureWatch(g *GenFile, rpc *RPC) string {
+	s := "Watch" + rpc.GoName + "(ctx " + g.GoIdent(contextPkg.Ident("Context")) + ") ("
+	streamImpl := fmt.Sprintf("%s_%sClient", serviceImplName, rpc.GoName)
+	s += "*" + streamImpl + ", error)"
 	return s
 }

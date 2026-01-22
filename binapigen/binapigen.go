@@ -561,6 +561,7 @@ type RPC struct {
 	MsgRequest *Message
 	MsgReply   *Message
 	MsgStream  *Message
+	MsgEvents  []*Message
 }
 
 func newRpc(file *File, service *Service, apitype vppapi.RPC) *RPC {
@@ -592,6 +593,15 @@ func (rpc *RPC) resolveMessages(gen *Generator) error {
 			return fmt.Errorf("rpc %v: no message for stream type %v", rpc.GoName, rpc.VPP.StreamMsg)
 		}
 		rpc.MsgStream = msg
+	}
+	if len(rpc.VPP.Events) > 0 {
+		for _, eventMsgName := range rpc.VPP.Events {
+			msg, ok := gen.messagesByName[eventMsgName]
+			if !ok {
+				return fmt.Errorf("rpc %v: no message for event type %v", rpc.GoName, eventMsgName)
+			}
+			rpc.MsgEvents = append(rpc.MsgEvents, msg)
+		}
 	}
 	return nil
 }
